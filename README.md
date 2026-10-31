@@ -1,117 +1,64 @@
 # kafscout
 
-**Fast, read-only Kafka substring scanner for time-windowed troubleshooting.**
+从 Kafka 海量消息里，按时间段快速找出包含某个订单号、设备号或关键字的消息。
 
-One static binary. No JVM, no install, no consumer group, no offset commits.
-Give it brokers + topic + time window + a substring (e.g. an order ID) and it
-fans out across **all partitions in parallel**, matches on **raw bytes** (zero
-deserialization), and prints every hit with partition, offset, and write
-timestamp.
+不用安装 Java，不创建消费组，不提交 offset；下载一个文件就能查。
 
-> ⚠️ AI-developed project. See [DISCLAIMER.md](DISCLAIMER.md). Chinese docs: [README.zh.md](README.zh.md)
+[English](README.en.md) · [完整中文技术手册](README.zh.md)
 
-## Why it exists
+## 什么时候用它
 
-Ops teams at scale hit the same wall: a Kafka topic holds 100M–1B messages a
-day, and you must find every occurrence of one value inside a time range.
-Kafka has no server-side value filter, so *someone* must pull and scan the
-bytes. JVM-based in-house tools usually scan serially per partition, allocate
-an object per message, and then wonder why an hour of data takes half the day.
+比如线上有人问：
 
-kafscout keeps the physics (you must read the window) and deletes everything
-else:
+> “昨天 14:00 到 15:00，订单 `ORD-8842117` 到底有没有进 Kafka？”
 
-| | traditional JVM scanner | kafscout |
-|---|---|---|
-| Parallelism | often serial per partition | goroutine per partition, shared client batching |
-| Matching | deserialize each record → `String.contains` | `bytes.Contains` on the raw payload, zero allocation |
-| Artifacts | jar + `lib/` (30 MB+) + JRE required | single static binary **7.6 MB**, nothing to install |
-| Kafka footprint | consumer group, commits offsets | manual offsets, **no group, no commit, read-only APIs only** |
-| Output | ad-hoc logs | `[time±tz] partition offset ts key value` + per-partition scan summary |
+Kafka 本身不能直接按消息内容搜索。传统脚本可能一个分区一个分区慢慢扫，kafscout 会并行扫描所有分区，只读数据，不影响原有消费者进度。
 
-## Quick start
+如果你平时不维护 Kafka，这个工具确实用不上；它就是给排查 Kafka 消息的开发和运维人员准备的。
 
-```sh
-# one-off
+## 三步使用
+
+### 1. 下载
+
+在 [Releases](https://github.com/zhy9709/kafscout/releases/latest) 下载压缩包，选择 Linux 或 Windows 版本。
+
+### 2. 填入 Kafka 地址和查询条件
+
+```bash
 ./kafscout-linux-amd64 \
   --brokers kafka1:9092,kafka2:9092 \
   --topic order-events \
-  --start "2026-10-22 00:00:00" --end "2026-10-22 01:00:00" \
-  --query "ORD-8842117" > hits.txt
-
-# or config-file style (mirrors a Java tool's properties file)
-./kafscout-linux-amd64 --conf kafscout.conf --query "ORD-8842117"
+  --start "2026-10-22 14:00:00" \
+  --end "2026-10-22 15:00:00" \
+  --query "ORD-8842117"
 ```
 
-```ini
-# kafscout.conf  (key=value; see conf.example.conf)
-brokers = kafka1:9092,kafka2:9092
-topic   = order-events
-tz      = Asia/Shanghai
-```
+### 3. 看结果
 
-Exit codes: `0` done (prints `NOT FOUND` if zero hits), `1` connect/scan error
-(`PARTIAL ... incomplete=true` — never a fake "not found"), `2` bad arguments.
+找到时会打印消息所在的分区、offset、时间和内容；没找到会明确显示 `NOT FOUND`。如果扫描中途失败，它会显示 `PARTIAL ... incomplete=true`，不会把“没扫完”冒充成“没找到”。
 
-## Features
+## 它会不会影响线上 Kafka？
 
-- **Time-windowed scan**: `offsetsForTimes` seeks each partition to the start
-  boundary; stops at `timestamp >= end`; never rewinds your real consumer groups.
-- **Parallel by design**: every partition gets its own consumer goroutine.
-- **Raw-byte matching**: compressed batches are inflated once by the client,
-  then matched without any JSON/Avro/Protobuf parsing.
-- **Multi-query**: `--query a,b,c`, first match wins per record.
-- **Safety rails**: read-only API surface (Describe/Read ACLs suffice),
-  per-record display truncation (`--max-bytes`), `--limit` early exit,
-  stall detection that fails loudly instead of hanging forever.
-- **Portable**: static Linux `amd64` binary and Windows `.exe`, IANA tzdata
-  embedded; runs in air-gapped networks with zero dependencies.
-- **SASL/PLAIN** supported; password via env var to keep secrets out of shell
-  history and process lists.
+设计上只使用读取接口：
 
-## What it does NOT do (by design)
+- 不生产消息
+- 不删除或修改数据
+- 不创建消费组
+- 不提交 offset
+- 不改变现有消费者进度
 
-- No TLS/SCRAM/Kerberos yet (plain or SASL/PLAIN listeners only).
-- No key-hash partition pruning (coming; today it scans values).
-- No guarantee on non-monotonic `CreateTime` topics (see limitations).
-- No server-side index — below ~100M msgs/day any scanner reads the window;
-  if you need instant search daily, that's ClickHouse/Elastic territory.
+它仍会读取指定时间段的数据，因此大范围扫描会消耗 Kafka 网络和磁盘资源。生产环境建议先查较短时间段，并使用只读账号。
 
-## Build & test (offline)
+## 当前支持
 
-```sh
-go build -mod=vendor -trimpath -ldflags='-s -w' .
-go test  -mod=vendor ./...   # includes a 100k-message mock scan with 3 planted hits
-go vet   -mod=vendor ./... && gofmt -l .
-./scripts/build.sh dist/     # cross-build linux+windows + SHA256SUMS
-```
+- Linux amd64、Windows amd64 单文件运行
+- 全分区并行扫描
+- 指定时间范围和多个关键词
+- 无认证或 SASL/PLAIN
+- 输出条数限制、进度显示和超长消息截断
 
-All dependencies vendored under `vendor/` (Apache-2.0 project; dep licenses in
-`vendor/` and `licenses/` in release archives).
-
-## Performance reality check
-
-An hour of 100 GB traffic-bound scan is limited by your NIC and brokers'
-disk, not the CPU — on a 10 GbE network expect single-digit minutes, on 1 GbE
-tens of minutes. We publish **no benchmark multiples**: the mock suite proves
-correctness; production numbers are yours to measure. Compare against `kcat`
-per-partition runs if you want an independent baseline.
-
-## Security & compliance notes
-
-Read [DISCLAIMER.md](DISCLAIMER.md). Short version: authorized use only;
-output contains raw message payloads which may include personal data —
-protect your `hits.txt`.
-
-## Origin story
-
-This tool was **developed end-to-end by AI agents**: specifications and
-acceptance gates written by an AI project manager (running on a Raspberry Pi),
-code generated and iterated by OpenAI Codex under strict red-line taskbooks
-(no credentials, no endpoints, no production writes, independent re-verification
-before merge). Human oversight: the whole pipeline is published; the human
-decides what ships. Yes, this README was written by the same machine.
+暂不支持 TLS、SCRAM、Kerberos。完整参数、边界条件、构建方法和验证记录请看[完整中文技术手册](README.zh.md)。
 
 ## License
 
-Apache-2.0. Third-party attributions in `vendor/` and `licenses/`.
+Apache-2.0

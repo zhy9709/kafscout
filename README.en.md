@@ -33,6 +33,11 @@ else:
 
 ## Quick start
 
+> **Check your Kafka connection mode first:** this release only supports
+> plaintext listeners with no authentication, or plaintext listeners using
+> SASL/PLAIN username/password authentication. It cannot connect to TLS/SSL,
+> `SASL_SSL`, SCRAM-SHA-256/512, Kerberos, or provider-specific authentication.
+
 ```sh
 # one-off
 ./kafscout-linux-amd64 \
@@ -74,6 +79,8 @@ Exit codes: `0` done (prints `NOT FOUND` if zero hits), `1` connect/scan error
 ## What it does NOT do (by design)
 
 - No TLS/SCRAM/Kerberos yet (plain or SASL/PLAIN listeners only).
+- No CA certificate, client certificate, or private-key configuration.
+- No provider-specific authentication such as AWS MSK IAM or Azure Event Hubs.
 - No key-hash partition pruning (coming; today it scans values).
 - No guarantee on non-monotonic `CreateTime` topics (see limitations).
 - No server-side index — below ~100M msgs/day any scanner reads the window;
@@ -104,6 +111,11 @@ per-partition runs if you want an independent baseline.
 Read [DISCLAIMER.md](DISCLAIMER.md). Short version: authorized use only;
 output contains raw message payloads which may include personal data —
 protect your `hits.txt`.
+
+“Read-only account” means Kafka server-side ACLs configured by an
+administrator, not a kafscout option. Grant only the required `Describe` and
+`Read` permissions for the target topic. kafscout uses read APIs but cannot
+turn an unrestricted account into a read-only account.
 
 ## Origin story
 

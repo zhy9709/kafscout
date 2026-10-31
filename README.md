@@ -18,6 +18,8 @@ Kafka 本身不能直接按消息内容搜索。传统脚本可能一个分区�
 
 ## 三步使用
 
+> **先确认你的 Kafka 连接方式：** 当前版本只适合**无认证的明文连接**，或**明文连接 + SASL/PLAIN 用户名密码认证**。如果公司的 Kafka 使用 TLS/SSL、`SASL_SSL`、SCRAM-SHA-256/512、Kerberos、云厂商专用认证，当前版本不能连接，请不要直接下载试错。
+
 ### 1. 下载
 
 在 [Releases](https://github.com/zhy9709/kafscout/releases/latest) 下载压缩包，选择 Linux 或 Windows 版本。
@@ -31,6 +33,20 @@ Kafka 本身不能直接按消息内容搜索。传统脚本可能一个分区�
   --start "2026-10-22 14:00:00" \
   --end "2026-10-22 15:00:00" \
   --query "ORD-8842117"
+```
+
+如果集群使用 SASL/PLAIN 账号认证，建议通过环境变量传密码，避免密码出现在命令历史和进程列表中：
+
+```bash
+export KAFKA_PASSWORD='由管理员提供的密码'
+./kafscout-linux-amd64 \
+  --brokers kafka1:9092,kafka2:9092 \
+  --topic order-events \
+  --start "2026-10-22 14:00:00" \
+  --end "2026-10-22 15:00:00" \
+  --query "ORD-8842117" \
+  --sasl-user "只读账号名" \
+  --sasl-pass-env KAFKA_PASSWORD
 ```
 
 ### 3. 看结果
@@ -47,7 +63,9 @@ Kafka 本身不能直接按消息内容搜索。传统脚本可能一个分区�
 - 不提交 offset
 - 不改变现有消费者进度
 
-它仍会读取指定时间段的数据，因此大范围扫描会消耗 Kafka 网络和磁盘资源。生产环境建议先查较短时间段，并使用只读账号。
+这里的“只读账号”不是 KafScout 的开关，而是 Kafka 管理员在服务端给账号配置的 ACL 权限。建议只授予目标 topic 所需的 `Describe` 和 `Read`；KafScout 不能把一个普通账号自动变成只读账号。
+
+它仍会读取指定时间段的数据，因此大范围扫描会消耗 Kafka 网络和磁盘资源。生产环境建议先查较短时间段，并使用上述最小权限账号。
 
 ## 当前支持
 
@@ -57,7 +75,15 @@ Kafka 本身不能直接按消息内容搜索。传统脚本可能一个分区�
 - 无认证或 SASL/PLAIN
 - 输出条数限制、进度显示和超长消息截断
 
-暂不支持 TLS、SCRAM、Kerberos。完整参数、边界条件、构建方法和验证记录请看[完整中文技术手册](README.zh.md)。
+### 当前版本不适合这些环境
+
+- Kafka 地址以 `SSL://` 或 `SASL_SSL://` 方式接入
+- 认证机制是 SCRAM-SHA-256、SCRAM-SHA-512 或 Kerberos
+- 需要 CA 证书、客户端证书或私钥
+- AWS MSK IAM、Azure Event Hubs 等云厂商专用认证
+- 账号没有目标 topic 的 `Describe` 和 `Read` 权限
+
+完整参数、边界条件、构建方法和验证记录请看[完整中文技术手册](README.zh.md)。
 
 ## License
 
